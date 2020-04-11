@@ -1,0 +1,113 @@
+Description: >
+  Thegaijin | Deploy application from S3 bucket
+Parameters:
+# whatever you consider a changing value, put it as a parameter instead of hard-coding it into your script
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resources
+    Type: String
+  S3ReadOnlyPolicy:
+    Description: EC2 read only policy
+    Type: String
+Resources:
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: All http  traffic to our loadbalance
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: All http  traffic to our hosts and SSH from local only
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  EC2S3ReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: EC2S3ReadOnlyRole
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement: 
+        - Effect: Allow
+          Principal:
+            Service: 
+            - ec2.amazonaws.com
+            Action:
+            - sts.AssumeRole
+      ManagedPolicyArns: 
+        - !Ref S3ReadOnlyPolicy
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName} EC2 role to pull from S3 buckets
+
+  EC2S3ReadOnlyProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2S3ReadOnlyRole
+
+  WebAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      IamInstanceProfile: !Ref EC2S3ReadOnlyProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udagramama-demo/udacity.zip .
+          unzip -o udacity.zip
+      ImageId: ami-0d1cd67c26f5fca19
+      KeyName: udagram-app
+      SecurityGroups:
+        - Ref: WebServerSecGroup
+      InstanceType: t2.medium
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "10"
+
+  WebAppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+      - Fn::ImportValue: 
+        !Sub "${EnvironmentName}-PRIV-NETS"
+      LaunchConfigurationName:
+        Ref: WebAppLaunchConfig
+      MinSize: "3"
+      MaxSize: "5"
+      TargetGroupARNs:
+      - Ref: WebAppTargetGroup
+
+  Outputs:
+  #Bonus points for useful outputs!

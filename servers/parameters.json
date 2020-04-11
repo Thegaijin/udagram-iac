@@ -1,0 +1,10 @@
+[
+    {
+        "ParameterKey": "EnvironmentName",
+        "ParameterValue": "UdagramNetwork"
+    },
+    {
+        "ParameterKey": "S3ReadOnlyPolicy",
+        "ParameterValue": "AmazonS3ReadOnlyAccess"
+    }
+]
