@@ -8,7 +8,9 @@ Parameters:
   S3ReadOnlyPolicy:
     Description: EC2 read only policy
     Type: String
+
 Resources:
+  # Stage 1
   LBSecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -47,21 +49,23 @@ Resources:
           ToPort: 65535
           CidrIp: 0.0.0.0/0
 
+  # Stage 2
   EC2S3ReadOnlyRole:
     Type: AWS::IAM::Role
-    Properties: 
-      RoleName: EC2S3ReadOnlyRole
-      AssumeRolePolicyDocument: 
-        Version: 2012-10-17
-        Statement: 
-        - Effect: Allow
-          Principal:
-            Service: 
-            - ec2.amazonaws.com
-            Action:
-            - sts.AssumeRole
-      ManagedPolicyArns: 
+    Properties:
+      RoleName: EC2S3ReadOnly
+      ManagedPolicyArns:
         - !Ref S3ReadOnlyPolicy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+      Path: /
       Tags: 
         - Key: Name
           Value: !Sub ${EnvironmentName} EC2 role to pull from S3 buckets
@@ -69,9 +73,11 @@ Resources:
   EC2S3ReadOnlyProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
+      InstanceProfileName: EC2S3ReadOnlyProfile
       Roles:
         - !Ref EC2S3ReadOnlyRole
 
+  # Stage 3
   WebAppLaunchConfig:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
@@ -84,7 +90,7 @@ Resources:
           apt-get install apache2 -y
           systemctl start apache2.service
           cd /var/www/html
-          aws s3 cp s3://udagramama-demo/udacity.zip .
+          aws s3 cp s3://bucket-demo/udacity.zip .
           unzip -o udacity.zip
       ImageId: ami-0d1cd67c26f5fca19
       KeyName: udagram-app
@@ -96,6 +102,7 @@ Resources:
           Ebs:
             VolumeSize: "10"
 
+  # Stage 4
   WebAppGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
@@ -104,10 +111,61 @@ Resources:
         !Sub "${EnvironmentName}-PRIV-NETS"
       LaunchConfigurationName:
         Ref: WebAppLaunchConfig
-      MinSize: "3"
-      MaxSize: "5"
+      MinSize: "4"
+      MaxSize: "4"
       TargetGroupARNs:
       - Ref: WebAppTargetGroup
 
+  WebAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+      SecurityGroups:
+        - Ref: LBSecGroup
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLB
+      Port: "80"
+      Protocol: HTTP
+
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref 'WebAppTargetGroup'
+      Conditions:
+      - Field: path-pattern
+        Values: [/]
+      ListenerArn: !Ref "Listener"
+      Priority: 1
+
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      HealthyThresholdCount: 5
+      VpcId:
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-VPCID"
+
   Outputs:
-  #Bonus points for useful outputs!
+    WebAppLBDNSName:
+      Description: The DNSName of the Load balancer
+      Value: !GetAtt WebAppLB.DNSName
+      Condition: CreateProdResources
